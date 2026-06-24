@@ -12,6 +12,7 @@ PANEL_W = 220
 WIN_W = MAP_W * TILE + PANEL_W
 WIN_H = MAP_H * TILE
 FPS = 60
+FOV_RADIUS = 5
 
 WALL = 0
 FLOOR = 1
@@ -20,13 +21,17 @@ STAIRS = 2
 COLOR_BG = (20, 20, 30)
 COLOR_WALL = (60, 60, 80)
 COLOR_FLOOR = (40, 40, 50)
+COLOR_WALL_DIM = (35, 35, 45)
+COLOR_FLOOR_DIM = (25, 25, 32)
 COLOR_STAIRS = (180, 160, 60)
+COLOR_STAIRS_DIM = (90, 80, 30)
 COLOR_PLAYER = (70, 130, 230)
 COLOR_SLIME = (50, 200, 80)
 COLOR_SKELETON = (210, 210, 210)
 COLOR_BAT = (170, 60, 200)
 COLOR_POTION = (220, 50, 50)
 COLOR_WEAPON = (230, 200, 50)
+COLOR_TRAP = (180, 80, 180)
 COLOR_PANEL_BG = (25, 25, 35)
 COLOR_TEXT = (220, 220, 220)
 COLOR_HP_BAR_BG = (80, 20, 20)
@@ -34,13 +39,21 @@ COLOR_HP_BAR = (200, 50, 50)
 COLOR_MSG = (180, 180, 180)
 
 
+def dim_color(color):
+    return (int(color[0] * 0.45), int(color[1] * 0.45), int(color[2] * 0.45))
+
+
 class TileMap:
     def __init__(self):
         self.tiles = [[WALL] * MAP_W for _ in range(MAP_H)]
+        self.visible = [[False] * MAP_W for _ in range(MAP_H)]
+        self.explored = [[False] * MAP_W for _ in range(MAP_H)]
         self.rooms = []
 
     def generate(self):
         self.tiles = [[WALL] * MAP_W for _ in range(MAP_H)]
+        self.visible = [[False] * MAP_W for _ in range(MAP_H)]
+        self.explored = [[False] * MAP_W for _ in range(MAP_H)]
         self.rooms = []
         num_rooms = random.randint(4, 7)
         for _ in range(num_rooms * 10):
@@ -114,6 +127,62 @@ class TileMap:
                 return x, y
             attempts += 1
         return None
+
+    def is_visible(self, x, y):
+        if 0 <= x < MAP_W and 0 <= y < MAP_H:
+            return self.visible[y][x]
+        return False
+
+    def is_explored(self, x, y):
+        if 0 <= x < MAP_W and 0 <= y < MAP_H:
+            return self.explored[y][x]
+        return False
+
+    def compute_fov(self, px, py):
+        for y in range(MAP_H):
+            for x in range(MAP_W):
+                self.visible[y][x] = False
+        self.visible[py][px] = True
+        self.explored[py][px] = True
+        for dy in range(-FOV_RADIUS, FOV_RADIUS + 1):
+            for dx in range(-FOV_RADIUS, FOV_RADIUS + 1):
+                if dx * dx + dy * dy > FOV_RADIUS * FOV_RADIUS:
+                    continue
+                self._cast_line(px, py, px + dx, py + dy)
+
+    def _cast_line(self, x0, y0, x1, y1):
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx - dy
+        cx, cy = x0, y0
+        while True:
+            if 0 <= cx < MAP_W and 0 <= cy < MAP_H:
+                self.visible[cy][cx] = True
+                self.explored[cy][cx] = True
+                if self.tiles[cy][cx] == WALL:
+                    return
+                if cx == x1 and cy == y1:
+                    return
+            else:
+                return
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                cx += sx
+            if e2 < dx:
+                err += dx
+                cy += sy
+
+
+class Trap:
+    def __init__(self, x, y, damage=0):
+        self.x = x
+        self.y = y
+        self.damage = damage if damage > 0 else random.randint(3, 8)
+        self.revealed = False
+        self.triggered = False
 
 
 class Entity:
@@ -196,6 +265,7 @@ class Game:
         self.player = None
         self.monsters = []
         self.items = []
+        self.traps = []
         self.messages = []
         self.current_floor = 1
         self.state = "play"
@@ -206,6 +276,7 @@ class Game:
         self.tilemap.generate()
         self.monsters.clear()
         self.items.clear()
+        self.traps.clear()
         start_room = 0
         px, py = self.tilemap.get_spawn_pos(start_room)
         if self.player is None:
@@ -229,12 +300,43 @@ class Game:
                 it = create_item(pos[0], pos[1], self.current_floor)
                 self.items.append(it)
                 occupied.add(pos)
+        num_traps = 3 + self.current_floor
+        for _ in range(num_traps):
+            pos = self.tilemap.get_random_floor(occupied)
+            if pos:
+                t = Trap(pos[0], pos[1])
+                self.traps.append(t)
+                occupied.add(pos)
+        self.tilemap.compute_fov(px, py)
+        self._update_trap_reveal()
         self.add_msg(f"Floor {self.current_floor}")
 
     def add_msg(self, text):
         self.messages.append(text)
         if len(self.messages) > 50:
             self.messages = self.messages[-50:]
+
+    def _update_trap_reveal(self):
+        for trap in self.traps:
+            if not trap.revealed and self.tilemap.is_visible(trap.x, trap.y):
+                trap.revealed = True
+
+    def _check_trap(self, x, y):
+        for trap in self.traps[:]:
+            if trap.x == x and trap.y == y and not trap.triggered:
+                trap.triggered = True
+                dmg = trap.damage
+                actual = max(1, dmg - self.player.defense)
+                self.player.hp -= actual
+                trap.revealed = True
+                self.add_msg(f"Triggered a trap! -{actual} HP")
+                if self.player.hp <= 0:
+                    self.player.hp = 0
+                    self.player.alive = False
+                    self.state = "dead"
+                self.traps.remove(trap)
+                return True
+        return False
 
     def try_move(self, dx, dy):
         nx, ny = self.player.x + dx, self.player.y + dy
@@ -243,10 +345,17 @@ class Game:
         blocker = self._monster_at(nx, ny)
         if blocker:
             self._player_attack(blocker)
+            self.tilemap.compute_fov(self.player.x, self.player.y)
+            self._update_trap_reveal()
             self._monster_turn()
             return
         self.player.x = nx
         self.player.y = ny
+        self.tilemap.compute_fov(self.player.x, self.player.y)
+        self._update_trap_reveal()
+        self._check_trap(nx, ny)
+        if self.state != "play":
+            return
         self._check_pickup()
         self._check_stairs()
         self._monster_turn()
@@ -288,6 +397,8 @@ class Game:
             m = self._monster_at(nx, ny)
             if m:
                 self._player_attack(m)
+                self.tilemap.compute_fov(self.player.x, self.player.y)
+                self._update_trap_reveal()
                 self._monster_turn()
                 return
 
@@ -354,19 +465,46 @@ class Game:
             for x in range(MAP_W):
                 rect = pygame.Rect(x * TILE, y * TILE, TILE, TILE)
                 t = self.tilemap.tiles[y][x]
+                visible = self.tilemap.is_visible(x, y)
+                explored = self.tilemap.is_explored(x, y)
+                if not explored:
+                    pygame.draw.rect(self.screen, COLOR_BG, rect)
+                    continue
+                if visible:
+                    wall_c, floor_c = COLOR_WALL, COLOR_FLOOR
+                    wall_b, floor_b = (50, 50, 70), (35, 35, 45)
+                    stairs_c = COLOR_STAIRS
+                else:
+                    wall_c, floor_c = COLOR_WALL_DIM, COLOR_FLOOR_DIM
+                    wall_b, floor_b = (25, 25, 35), (20, 20, 28)
+                    stairs_c = COLOR_STAIRS_DIM
                 if t == WALL:
-                    pygame.draw.rect(self.screen, COLOR_WALL, rect)
-                    pygame.draw.rect(self.screen, (50, 50, 70), rect, 1)
+                    pygame.draw.rect(self.screen, wall_c, rect)
+                    pygame.draw.rect(self.screen, wall_b, rect, 1)
                 elif t == FLOOR:
-                    pygame.draw.rect(self.screen, COLOR_FLOOR, rect)
-                    pygame.draw.rect(self.screen, (35, 35, 45), rect, 1)
+                    pygame.draw.rect(self.screen, floor_c, rect)
+                    pygame.draw.rect(self.screen, floor_b, rect, 1)
                 elif t == STAIRS:
-                    pygame.draw.rect(self.screen, COLOR_FLOOR, rect)
+                    pygame.draw.rect(self.screen, floor_c, rect)
                     inner = rect.inflate(-8, -8)
-                    pygame.draw.rect(self.screen, COLOR_STAIRS, inner)
-                    pygame.draw.polygon(self.screen, (220, 200, 80),
-                                        [inner.midtop, inner.midright, inner.midbottom])
+                    pygame.draw.rect(self.screen, stairs_c, inner)
+                    if visible:
+                        pygame.draw.polygon(self.screen, (220, 200, 80),
+                                            [inner.midtop, inner.midright, inner.midbottom])
+        for trap in self.traps:
+            if trap.revealed and (self.tilemap.is_visible(trap.x, trap.y) or self.tilemap.is_explored(trap.x, trap.y)):
+                rect = pygame.Rect(trap.x * TILE + 4, trap.y * TILE + 4, TILE - 8, TILE - 8)
+                c = COLOR_TRAP if self.tilemap.is_visible(trap.x, trap.y) else dim_color(COLOR_TRAP)
+                pygame.draw.circle(self.screen, c, rect.center, TILE // 2 - 6)
+                pygame.draw.rect(self.screen, (60, 20, 60), rect, 1, border_radius=4)
+                cx, cy = rect.center
+                pygame.draw.line(self.screen, (255, 220, 100),
+                                 (cx - 6, cy - 6), (cx + 6, cy + 6), 2)
+                pygame.draw.line(self.screen, (255, 220, 100),
+                                 (cx + 6, cy - 6), (cx - 6, cy + 6), 2)
         for item in self.items:
+            if not self.tilemap.is_visible(item.x, item.y):
+                continue
             rect = pygame.Rect(item.x * TILE + 6, item.y * TILE + 6, TILE - 12, TILE - 12)
             if item.kind == "potion":
                 pygame.draw.ellipse(self.screen, item.color, rect)
@@ -376,6 +514,8 @@ class Game:
                 pygame.draw.polygon(self.screen, item.color,
                                     [rect.midtop, rect.bottomright, rect.bottomleft])
         for m in self.monsters:
+            if not self.tilemap.is_visible(m.x, m.y):
+                continue
             rect = pygame.Rect(m.x * TILE + 2, m.y * TILE + 2, TILE - 4, TILE - 4)
             pygame.draw.rect(self.screen, m.color, rect, border_radius=4)
             eye_y = rect.y + 10
