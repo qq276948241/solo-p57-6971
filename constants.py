@@ -1,0 +1,40 @@
+import pygame
+
+pygame.init()
+
+TILE = 32
+MAP_W = 20
+MAP_H = 15
+PANEL_W = 220
+WIN_W = MAP_W * TILE + PANEL_W
+WIN_H = MAP_H * TILE
+FPS = 60
+FOV_RADIUS = 5
+
+WALL = 0
+FLOOR = 1
+STAIRS = 2
+
+COLOR_BG = (20, 20, 30)
+COLOR_WALL = (60, 60, 80)
+COLOR_FLOOR = (40, 40, 50)
+COLOR_WALL_DIM = (35, 35, 45)
+COLOR_FLOOR_DIM = (25, 25, 32)
+COLOR_STAIRS = (180, 160, 60)
+COLOR_STAIRS_DIM = (90, 80, 30)
+COLOR_PLAYER = (70, 130, 230)
+COLOR_SLIME = (50, 200, 80)
+COLOR_SKELETON = (210, 210, 210)
+COLOR_BAT = (170, 60, 200)
+COLOR_POTION = (220, 50, 50)
+COLOR_WEAPON = (230, 200, 50)
+COLOR_TRAP = (180, 80, 180)
+COLOR_PANEL_BG = (25, 25, 35)
+COLOR_TEXT = (220, 220, 220)
+COLOR_HP_BAR_BG = (80, 20, 20)
+COLOR_HP_BAR = (200, 50, 50)
+COLOR_MSG = (180, 180, 180)
+
+
+def dim_color(color):
+    return (int(color[0] * 0.45), int(color[1] * 0.45), int(color[2] * 0.45))
